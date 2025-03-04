@@ -75,7 +75,13 @@ io.on('connection', (socket) => {
             allUser = allUser.toString();
         }
 
-        io.to(partners[obj.partnerKey]).emit('userData', stringToBinary(allUser));
+        if (partners && partners[obj.partnerKey] && Object.keys(partners[obj.partnerKey]).length) {
+            let partnerUser = Object.keys(partners[obj.partnerKey])
+            for (let i = 0; i < partnerUser.length; i++) {
+                console.log(partners[obj.partnerKey][partnerUser[i]]);
+                io.to(partners[obj.partnerKey][partnerUser[i]]).emit('userData', stringToBinary(allUser));
+            }
+        }
     });
 
     // PARTNER JOINED EVENT
