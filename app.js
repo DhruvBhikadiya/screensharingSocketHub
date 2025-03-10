@@ -3,6 +3,9 @@ const { createServer } = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
 const bodyParser = require('body-parser');
+const { crmConfig } = require('./config.js');
+const { Client } = require('pg');
+const CryptoJs = require('crypto-js');
 require('dotenv').config();
 
 const app = express();
@@ -44,15 +47,29 @@ const binaryEvent = (event) => {
     }).join(' ');
 };
 
-var userSocket = {};
-
 var partners = {};
 
 var users = {};
 
-var screenShare = {};
-
 io.on('connection', (socket) => {
+    const sendUserData = (users, partners, partnerKey) => {
+        let allUser = [];
+        if (users?.[partnerKey]) {
+            allUser = [...allUser, ...Object.keys(users[partnerKey])].toString()
+        }
+        else {
+            allUser = allUser.toString();
+        }
+
+        if (partners && partners[partnerKey] && Object.keys(partners[partnerKey]).length) {
+            let partnerUser = Object.keys(partners[partnerKey])
+            for (let i = 0; i < partnerUser.length; i++) {
+                console.log(partners[partnerKey][partnerUser[i]]);
+                io.to(partners[partnerKey][partnerUser[i]]).emit('userData', stringToBinary(allUser));
+            }
+        }
+    }
+
     // USER JOINED EVENT
     const userJoined = binaryEvent('userJoined');
     socket.on(userJoined, async (data) => {
@@ -67,21 +84,8 @@ io.on('connection', (socket) => {
 
         users[obj.partnerKey][obj.userId] = obj.socketId;
 
-        let allUser = [];
-        if (users?.[obj.partnerKey]) {
-            allUser = [...allUser, ...Object.keys(users[obj.partnerKey])].toString()
-        }
-        else {
-            allUser = allUser.toString();
-        }
+        sendUserData(users, partners, obj.partnerKey);
 
-        if (partners && partners[obj.partnerKey] && Object.keys(partners[obj.partnerKey]).length) {
-            let partnerUser = Object.keys(partners[obj.partnerKey])
-            for (let i = 0; i < partnerUser.length; i++) {
-                console.log(partners[obj.partnerKey][partnerUser[i]]);
-                io.to(partners[obj.partnerKey][partnerUser[i]]).emit('userData', stringToBinary(allUser));
-            }
-        }
     });
 
     // PARTNER JOINED EVENT
@@ -90,9 +94,11 @@ io.on('connection', (socket) => {
         const jsonstring = binaryToString(data);
         const obj = JSON.parse(jsonstring);
 
-        console.log('partnerJoined', obj.socketId);
+        if (!partners[obj.partnerKey]) {
+            partners[obj.partnerKey] = {};
+        }
 
-        partners[obj.partnerKey] = obj.socketId;
+        partners[obj.partnerKey][obj.userId] = obj.socketId;
 
         let allUser = [];
         if (users?.[obj.partnerKey]) {
@@ -102,23 +108,8 @@ io.on('connection', (socket) => {
             allUser = allUser.toString();
         }
 
-        // socket.to(obj.socketId).emit('previousUserData', stringToBinary(allUser.toString()));
-
-        console.log(obj.socketId, '-- sokcet id --');
-
-        if (!io.sockets.sockets.get(obj.socketId)) {
-            console.error(`Socket ID ${obj.socketId} is not connected`);
-            return;
-        }
-
         io.to(obj.socketId).emit('userData', stringToBinary(allUser));
-        // socket.emit('userData', stringToBinary(allUser));
-
     });
-
-    const getUsersByPartner = (partnerKey) => {
-        let partnerWiseUser = [];
-    }
 
     // SCREEN-SHOT EVENT CALLED FROM PARTNER
     const userClicked = binaryEvent('userClicked');
@@ -144,53 +135,16 @@ io.on('connection', (socket) => {
     socket.on(request_screen_share, (data) => {
         const stringData = binaryToString(data);
         const parsedData = JSON.parse(stringData);
-        console.log(parsedData, '-- parsedData --');
-        console.log(users, '-- users --');
         const userSocketId = users[parsedData.partnerKey][parsedData.id];
         const start_screen_share = binaryEvent('start_screen_share');
-        console.log(users[parsedData.partnerKey][parsedData.id]);
-        socket.to(userSocketId).emit(start_screen_share, stringToBinary(parsedData.peerId));
-    });
-
-    const ice_candidate = binaryEvent('ice_candidate');
-    socket.on(ice_candidate, (data) => {
-        const jsonString = binaryToString(data);
-        const obj = JSON.parse(jsonString);
-        if (obj.id) {
-            const candidateString = obj.candidate;
-            const binaryCandidate = stringToBinary(JSON.stringify(candidateString));
-            const userSocket = users[obj.partnerKey][obj.id];
-            const ice_candidate = binaryEvent('ice_candidate');
-            socket.to(userSocket).emit(ice_candidate, binaryCandidate);
-        }
-        else {
-            const partnersocket = partners[obj.partneKey];
-            const ice_candidate = binaryEvent('ice_candidate');
-            io.to(partnersocket).emit(ice_candidate, data);
-        }
-    });
-
-    const sendOffer = binaryEvent('sendOffer');
-    socket.on(sendOffer, (offer, partnerKeyBinary) => {
-        const partnerKey = binaryToString(partnerKeyBinary);
-        const partnerSocket = partners[partnerKey];
-        socket.to(partnerSocket).emit(sendOffer, offer);
-    });
-
-    const sendAnswer = binaryEvent('sendAnswer');
-    socket.on(sendAnswer, ({ binaryAnswer, id, partnerKey }) => {
-        const userId = binaryToString(String(id));
-        const partnerkey = binaryToString(String(partnerKey));
-
-        const userSocketId = users[partnerkey][userId];
-        screenShare[userId] = 1;
-        socket.to(userSocketId).emit(sendAnswer, binaryAnswer);
+        console.log(users[parsedData.partnerKey][parsedData.id], '-- userSocketId --');
+        socket.to(userSocketId).emit(start_screen_share, stringToBinary(JSON.stringify({ peerId: parsedData.peerId, userId: parsedData.userId })));
     });
 
     const stoppedScreenSharing = binaryEvent('stoppedScreenSharing');
-    socket.on(stoppedScreenSharing, (partnerKey) => {
-        const Partner = binaryToString(partnerKey);
-        const partnerSocket = partners[Partner];
+    socket.on(stoppedScreenSharing, (stopedData) => {
+        const { partnerKey, userId } = JSON.parse(binaryToString(stopedData));
+        const partnerSocket = partners[partnerKey][userId];
 
         socket.to(partnerSocket).emit(stoppedScreenSharing);
     });
@@ -217,42 +171,82 @@ io.on('connection', (socket) => {
     });
     // NOTIFICATION END
 
-    function deleteSocketId(socketId, ...dataObjects) {
-        let deleted = false;
+    const DecryptData = async (data) => {
+        if (data) {
+            data = decodeURIComponent(data);
+            var key = CryptoJs.enc.Utf8.parse("acg7ay8h447825cg");
+            var iv = CryptoJs.enc.Utf8.parse("8080808080808080");
+            var DecryptedSession = CryptoJs.AES.decrypt(data, key, {
+                keySize: 128 / 8,
+                iv: iv,
+                mode: CryptoJs.mode.CBC,
+                padding: CryptoJs.pad.Pkcs7,
+            }).toString(CryptoJs.enc.Utf8);
+            return DecryptedSession;
+        } else {
+            return "";
+        }
+    };
 
-        for (const data of dataObjects) {
-            for (const key in data) {
-                if (typeof data[key] === "string") {
-                    // Case 1: Direct mapping (Object 1)
-                    if (data[key] === socketId) {
-                        delete data[key];
-                        console.log(`Deleted direct socket ID: ${socketId}`);
-                        deleted = true;
-                    }
-                } else if (typeof data[key] === "object") {
-                    // Case 2: Nested mapping (Object 2)
-                    for (const userId in data[key]) {
-                        if (data[key][userId] === socketId) {
-                            delete data[key][userId];
-                            console.log(`Deleted userId ${userId} with socket ID ${socketId}`);
-                            deleted = true;
+    const sendUserSubscription = binaryEvent('sendUserSubscription');
+    socket.on(sendUserSubscription, async (partnerKey, userName, endpoint, expirationTime, subscription) => {
+        let connection = new Client(crmConfig);
+        try {
+            await connection.connect();
+            if (!partnerKey) return res.status(401).json({ code: -1, message: "Please set header in partnerkey..!" });
+            const token = binaryToString(partnerKey);
+            const decryptToken = await DecryptData(token);
+            const [partnerid, name, secret_key] = decryptToken.split(":");
+            const schemaName = `partner_${partnerid}_${name.trim().replace(/\s+/g, "_").toLowerCase()}`;
+
+            const keys = subscription.keys;
+            const username = binaryToString(userName);
+            const params = [schemaName, username, JSON.parse(binaryToString(endpoint)), JSON.parse(binaryToString(expirationTime)), keys];
+            await connection.query(`select public.insert_user_subscription($1,$2,$3,$4,$5)`, params);
+        } catch (e) {
+            console.log(e);
+        }
+        finally {
+            await connection.end();
+        }
+    });
+
+    function deleteSocketId(socketId, ...objects) {
+        let found = false;
+        let partnerKey;
+        objects.forEach((obj, index) => {
+            for (const outerKey in obj) {
+                for (const userId in obj[outerKey]) {
+                    if (obj[outerKey][userId] === socketId) {
+                        delete obj[outerKey][userId];
+                        console.log(`Deleted userId "${userId}" with socket ID "${socketId}" from object ${index + 1}.`);
+                        found = true;
+
+                        if (Object.keys(obj[outerKey]).length === 0) {
+                            delete obj[outerKey];
+                            console.log(`Deleted empty outer key: "${outerKey}" from object ${index + 1}.`);
                         }
-                    }
 
-                    // If the nested object is now empty, delete the outer key
-                    if (Object.keys(data[key]).length === 0) {
-                        delete data[key];
-                        console.log(`Deleted empty object for key: ${key}`);
+                        partnerKey = outerKey;
+
                     }
                 }
             }
+        });
+
+        if (!found) {
+            console.log(`Socket ID "${socketId}" not found in any object.`);
         }
 
-        return deleted;
+        return partnerKey;
     }
 
     socket.on('disconnect', async () => {
         console.log('User disconnected :- ', socket.id);
+
+        const partnerKey = deleteSocketId(socket.id, partners, users);
+
+        sendUserData(users, partners, partnerKey);
     });
 });
 
