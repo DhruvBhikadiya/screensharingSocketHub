@@ -12,9 +12,9 @@ const app = express();
 const server = createServer(app);
 
 const io = new Server(server, {
-    maxHttpBufferSize: 1e8,
     cors: {
-        origin: "https://dhruvbhikadiya.github.io'",
+        origin: "https://demo-partner-ui.vercel.app",
+        methods: ["GET", "POST"]
     }
 });
 
